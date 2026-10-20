@@ -232,12 +232,13 @@ menu "Sound Pressure Meter Configuration"
             bool "None (Z-weighting, dBZ)"
     endchoice
 
-    config SPL_LEQ_PERIOD_SEC
-        int "Leq period / MQTT publish interval (seconds)"
-        range 1 3600
-        default 1
+    config SPL_LEQ_PERIOD_MS
+        int "Leq period / MQTT publish interval (milliseconds)"
+        range 100 3600000
+        default 500
         help
             Equivalent continuous sound level is calculated over this period and published via MQTT.
+            Default 500 ms = 0.5 seconds.
 
     config SPL_MIC_SENSITIVITY_DBFS
         int "Microphone sensitivity (dBFS)"

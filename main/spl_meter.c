@@ -21,7 +21,7 @@
  *    microphone equalizer filter and the weighting filter and pushes the sum of
  *    squares of each 125 ms block into a queue.
  *  - spl_calc_task converts the sums into dB values relative to the microphone
- *    reference amplitude, calculates Leq over CONFIG_SPL_LEQ_PERIOD_SEC and
+ *    reference amplitude, calculates Leq over CONFIG_SPL_LEQ_PERIOD_MS and
  *    publishes it via MQTT.
  */
 
@@ -57,7 +57,7 @@ static const char *TAG = "SPL";
 #define SAMPLE_BITS         32                  /* slot width on the I2S bus */
 #define SAMPLES_SHORT       (SAMPLE_RATE / 8)   /* 125 ms block */
 #define SAMPLES_CHUNK       1000                /* samples per I2S read, must divide SAMPLES_SHORT */
-#define SAMPLES_LEQ         (SAMPLE_RATE * CONFIG_SPL_LEQ_PERIOD_SEC)
+#define SAMPLES_LEQ         (SAMPLE_RATE * CONFIG_SPL_LEQ_PERIOD_MS / 1000)
 
 #define DMA_FRAME_NUM       500
 #define DMA_DESC_NUM        16
@@ -595,7 +595,7 @@ static void spl_calc_task(void *arg)
 #if CONFIG_SPL_DIAGNOSTICS
             int64_t tl0 = esp_timer_get_time();
 #endif
-            ESP_LOGI(TAG, "L%seq(%ds) = %.1f %s%s%s", WEIGHTING_NAME, CONFIG_SPL_LEQ_PERIOD_SEC, leq_db, DB_UNITS,
+            ESP_LOGI(TAG, "L%seq(%.1fs) = %.1f %s%s%s", WEIGHTING_NAME, CONFIG_SPL_LEQ_PERIOD_MS / 1000.0, leq_db, DB_UNITS,
                      overload ? " [overload]" : "", low ? " [below noise floor]" : "");
 #if CONFIG_SPL_DIAGNOSTICS
             double leq_z_db = MIC_OFFSET_DB + MIC_REF_DB + 20 * log10(sqrt(leq_sum_sqr_z / leq_samples) / mic_ref_ampl);
@@ -803,6 +803,6 @@ esp_err_t spl_meter_start(void)
                         ESP_ERR_NO_MEM, TAG, "spl_mon task creation failed");
 #endif
 
-    ESP_LOGI(TAG, "SPL meter started (%s weighting, Leq period %d s)", WEIGHTING_NAME, CONFIG_SPL_LEQ_PERIOD_SEC);
+    ESP_LOGI(TAG, "SPL meter started (%s weighting, Leq period %.1f s)", WEIGHTING_NAME, CONFIG_SPL_LEQ_PERIOD_MS / 1000.0);
     return ESP_OK;
 }
