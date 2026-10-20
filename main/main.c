@@ -37,6 +37,9 @@ enum {
 
 static int current_mode = NORMAL_MODE;
 
+/* LED flash enabled state: controls the slow green LED flash in NORMAL_MODE */
+static bool led_flash_enabled = true;
+
 
 static void gpio_hold_monitor_task(void *arg)
 {
@@ -79,16 +82,50 @@ static void led_blink_task(void *arg)
     int level = 0;
     for (;;) {
         if (current_mode == NORMAL_MODE) {
-            board_led_operation(LED_G, LED_ON);
-            vTaskDelay(pdMS_TO_TICKS(25));
-            board_led_operation(LED_G, LED_OFF);
-            vTaskDelay(pdMS_TO_TICKS(975));
+            /* Only blink if LED flash is enabled */
+            if (led_flash_enabled) {
+                board_led_operation(LED_G, LED_ON);
+                vTaskDelay(pdMS_TO_TICKS(25));
+                board_led_operation(LED_G, LED_OFF);
+                vTaskDelay(pdMS_TO_TICKS(975));
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
         } else {
             level = !level;
             vTaskDelay(fast_led_blink_interval);
             board_led_operation(LED_G, LED_TOGGLE);
         }
     }
+}
+
+/* Load LED flash enabled state from NVS, or use default (enabled) */
+static void led_flash_enabled_load(void)
+{
+    extern char* mqtt_nvs_get_parameter(const char *parameter);
+    char *state_str = mqtt_nvs_get_parameter("led_flash_enabled");
+    if (state_str != NULL) {
+        led_flash_enabled = (strcmp(state_str, "1") == 0);
+        ESP_LOGI(TAG, "LED flash loaded from NVS: %s", led_flash_enabled ? "enabled" : "disabled");
+        free(state_str);
+    } else {
+        ESP_LOGI(TAG, "LED flash using default: enabled");
+    }
+}
+
+/* Save LED flash enabled state to NVS */
+void led_flash_enabled_set(bool enabled)
+{
+    extern void mqtt_nvs_save_parameters(const char *parameter, const char *value);
+    mqtt_nvs_save_parameters("led_flash_enabled", enabled ? "1" : "0");
+    led_flash_enabled = enabled;
+    ESP_LOGI(TAG, "LED flash %s", enabled ? "enabled" : "disabled");
+}
+
+/* Get LED flash enabled state */
+bool led_flash_enabled_get(void)
+{
+    return led_flash_enabled;
 }
 
 void set_log_levels() {
@@ -158,6 +195,9 @@ void app_main(void) {
     
     // Start serial command processor for configuration via USB console
     serial_commands_init(8192, tskIDLE_PRIORITY + 1);
+    
+    // Load LED flash enabled state from NVS
+    led_flash_enabled_load();
     
     ESP_LOGI(TAG, "Starting Sound Scanner");
     

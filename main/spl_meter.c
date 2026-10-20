@@ -46,6 +46,7 @@
 #include "mqtt_sensor_client.h"
 #include "spl_meter.h"
 #include "driver/gpio.h"
+#include "board.h"
 
 static const char *TAG = "SPL";
 
@@ -74,7 +75,7 @@ static const char *TAG = "SPL";
 #define I2S_TASK_PRI        7
 #define I2S_TASK_STACK      4096
 #define CALC_TASK_PRI       6
-#define CALC_TASK_STACK     4096
+#define CALC_TASK_STACK     6144
 
 #if CONFIG_SPL_DIAGNOSTICS
 #define MON_TASK_PRI        8                   /* above the reader so the report is printed even when overloaded */
@@ -295,6 +296,190 @@ static sos_filter_t mic_equalizer;
 static sos_filter_t weighting;
 
 /* ------------------------------------------------------------------------- */
+/* FFT band analysis (only when the threshold is exceeded)                   */
+/* ------------------------------------------------------------------------- */
+
+#if CONFIG_SPL_FFT_ENABLE
+
+#define FFT_N               1024                        /* 31.25 Hz per bin at 32 kHz */
+#define FFT_BANDS           16
+#define FFT_BINS_PER_BAND   (FFT_N / 2 / FFT_BANDS)     /* 32 bins = 1 kHz */
+
+_Static_assert(SAMPLES_CHUNK < FFT_N, "FFT ring must hold more than one chunk");
+
+enum { FFT_IDLE = 0, FFT_REQUESTED, FFT_READY };
+
+/*
+ * Handshake between the tasks (single core, no locking needed):
+ *   calc task  : IDLE -> REQUESTED when the threshold is exceeded
+ *   reader task: REQUESTED -> READY after copying the latest FFT_N equalized samples to fft_re
+ *   calc task  : READY -> IDLE after the spectrum has been calculated (fft_re/fft_im are owned by the calc
+ *                task while the state is READY)
+ */
+static volatile int fft_state = FFT_IDLE;
+static int32_t fft_ring[FFT_N];     /* last FFT_N equalized (unweighted) samples, written by the reader */
+static size_t fft_ring_pos;
+static int32_t fft_re[FFT_N];
+static int32_t fft_im[FFT_N];
+static int16_t fft_cos[FFT_N / 2 + 1];  /* Q15, cos(2 pi i / FFT_N), also gives the sine and the Hann window */
+
+static void fft_tables_init(void)
+{
+    for (int i = 0; i <= FFT_N / 2; i++) {
+        fft_cos[i] = (int16_t)lroundf(cosf(2.0f * (float)M_PI * (float)i / FFT_N) * 32767.0f);
+    }
+}
+
+/* Called by the reader task with every equalized chunk */
+static void fft_capture(const int32_t *buf, size_t len)
+{
+    size_t first = FFT_N - fft_ring_pos;
+    if (first > len) {
+        first = len;
+    }
+    memcpy(&fft_ring[fft_ring_pos], buf, first * sizeof(int32_t));
+    if (len > first) {
+        memcpy(fft_ring, buf + first, (len - first) * sizeof(int32_t));
+    }
+    fft_ring_pos = (fft_ring_pos + len) % FFT_N;
+
+    if (fft_state == FFT_REQUESTED) {
+        /* The oldest sample is at fft_ring_pos */
+        size_t n1 = FFT_N - fft_ring_pos;
+        memcpy(fft_re, &fft_ring[fft_ring_pos], n1 * sizeof(int32_t));
+        memcpy(fft_re + n1, fft_ring, fft_ring_pos * sizeof(int32_t));
+        fft_state = FFT_READY;
+    }
+}
+
+/*
+ * In place radix-2 decimation-in-time FFT with Q15 twiddles and 32-bit data. Block floating point: before each
+ * stage the data is scaled down just enough to rule out overflow. Returns the total number of bits the data
+ * was shifted right, i.e. true_value = result * 2^shift.
+ */
+static int fft_run(int32_t *re, int32_t *im)
+{
+    for (unsigned i = 1, j = 0; i < FFT_N; i++) {
+        unsigned bit = FFT_N >> 1;
+        for (; j & bit; bit >>= 1) {
+            j ^= bit;
+        }
+        j ^= bit;
+        if (i < j) {
+            int32_t t = re[i]; re[i] = re[j]; re[j] = t;
+            t = im[i]; im[i] = im[j]; im[j] = t;
+        }
+    }
+
+    int total_shift = 0;
+    for (unsigned len = 2; len <= FFT_N; len <<= 1) {
+        const unsigned half = len >> 1;
+        const unsigned step = FFT_N / len;
+
+        int32_t maxv = 0;
+        for (unsigned i = 0; i < FFT_N; i++) {
+            const int32_t a = re[i] < 0 ? -re[i] : re[i];
+            const int32_t b = im[i] < 0 ? -im[i] : im[i];
+            if (a > maxv) {
+                maxv = a;
+            }
+            if (b > maxv) {
+                maxv = b;
+            }
+        }
+        /* A butterfly output is at most 2 * sqrt(2) * max(|component|) < 3 * max */
+        int s = 0;
+        while ((((int64_t)maxv * 3) >> s) >= INT32_MAX) {
+            s++;
+        }
+        total_shift += s;
+        const int64_t rnd = s ? (1LL << (s - 1)) : 0;
+
+        for (unsigned k = 0; k < half; k++) {
+            const unsigned idx = k * step;      /* twiddle W = exp(-j 2 pi idx / FFT_N) = wr + j wi */
+            const int32_t wr = fft_cos[idx];
+            const int32_t wi = -(int32_t)fft_cos[idx <= FFT_N / 4 ? FFT_N / 4 - idx : idx - FFT_N / 4];
+            for (unsigned i = k; i < FFT_N; i += len) {
+                const unsigned j = i + half;
+                const int64_t tr = ((int64_t)re[j] * wr - (int64_t)im[j] * wi + (1 << 14)) >> 15;
+                const int64_t ti = ((int64_t)re[j] * wi + (int64_t)im[j] * wr + (1 << 14)) >> 15;
+                const int64_t ur = re[i];
+                const int64_t ui = im[i];
+                re[i] = (int32_t)((ur + tr + rnd) >> s);
+                im[i] = (int32_t)((ui + ti + rnd) >> s);
+                re[j] = (int32_t)((ur - tr + rnd) >> s);
+                im[j] = (int32_t)((ui - ti + rnd) >> s);
+            }
+        }
+    }
+    return total_shift;
+}
+
+/* Calculate the 16 band levels (dB SPL, unweighted) from the snapshot in fft_re and publish them */
+static void fft_report(double mic_ref_ampl, const char *mac_str)
+{
+    /* Hann window (periodic, mean square 3/8) */
+    for (int n = 0; n < FFT_N; n++) {
+        const int32_t c = fft_cos[n <= FFT_N / 2 ? n : FFT_N - n];
+        const int32_t w = (32768 - c) >> 1;                         /* Q15 */
+        fft_re[n] = (int32_t)(((int64_t)fft_re[n] * w + (1 << 14)) >> 15);
+        fft_im[n] = 0;
+    }
+
+    const int shift = fft_run(fft_re, fft_im);
+    const double scale = ldexp(1.0, shift);
+
+    /* Peak bin (ignoring DC) */
+    unsigned peak_bin = 1;
+    uint64_t peak_pow = 0;
+    for (unsigned k = 1; k < FFT_N / 2; k++) {
+        const uint64_t p = (uint64_t)((int64_t)fft_re[k] * fft_re[k]) + (uint64_t)((int64_t)fft_im[k] * fft_im[k]);
+        if (p > peak_pow) {
+            peak_pow = p;
+            peak_bin = k;
+        }
+    }
+
+    /*
+     * Band mean square = 2 * sum|X|^2 / (N^2 * 3/8) (one sided spectrum, Hann window power), which gives the
+     * same dB scale as the Leq so that the bands add up to the overall unweighted level.
+     */
+    float band_db[FFT_BANDS];
+    for (int b = 0; b < FFT_BANDS; b++) {
+        double sum = 0.0;
+        for (int k = b * FFT_BINS_PER_BAND; k < (b + 1) * FFT_BINS_PER_BAND; k++) {
+            sum += (double)fft_re[k] * fft_re[k] + (double)fft_im[k] * fft_im[k];
+        }
+        const double ms = 2.0 * sum * scale * scale / ((double)FFT_N * FFT_N * 0.375);
+        const double db = MIC_OFFSET_DB + MIC_REF_DB + 20 * log10(sqrt(ms) / mic_ref_ampl);
+        band_db[b] = isfinite(db) ? (float)db : 0.0f;
+    }
+    fft_state = FFT_IDLE;   /* fft_re/fft_im are no longer needed */
+
+    const float peak_hz = (float)peak_bin * SAMPLE_RATE / FFT_N;
+    const int band_hz = SAMPLE_RATE / 2 / FFT_BANDS;
+
+    char json[320];
+    int len = snprintf(json, sizeof(json),
+                       "{\"type\":\"spectrum\",\"weighting\":\"Z\",\"band_hz\":%d,\"peak_hz\":%.1f,\"bands\":[",
+                       band_hz, peak_hz);
+    for (int b = 0; b < FFT_BANDS && len > 0 && len < (int)sizeof(json); b++) {
+        len += snprintf(json + len, sizeof(json) - len, "%s%.1f", b ? "," : "", band_db[b]);
+    }
+    if (len > 0 && len < (int)sizeof(json) - 2) {
+        snprintf(json + len, sizeof(json) - len, "]}");
+    }
+
+    ESP_LOGI(TAG, "FFT peak %.0f Hz, %d Hz bands (dBZ): %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f",
+             peak_hz, band_hz, band_db[0], band_db[1], band_db[2], band_db[3], band_db[4], band_db[5], band_db[6],
+             band_db[7], band_db[8], band_db[9], band_db[10], band_db[11], band_db[12], band_db[13], band_db[14],
+             band_db[15]);
+    publish_sensor_string(mac_str, json);
+}
+
+#endif /* CONFIG_SPL_FFT_ENABLE */
+
+/* ------------------------------------------------------------------------- */
 /* I2S microphone                                                            */
 /* ------------------------------------------------------------------------- */
 
@@ -382,6 +567,40 @@ double spl_threshold_get(void)
 {
     return spl_mqtt_threshold;
 }
+
+#if CONFIG_SPL_FFT_ENABLE
+/* FFT reporting enabled state: only report spectrum when threshold is exceeded and this flag is true */
+static bool fft_report_enabled = true;
+
+/* Load FFT reporting state from NVS, or use default (enabled) */
+static void fft_report_enabled_load(void)
+{
+    extern char* mqtt_nvs_get_parameter(const char *parameter);
+    char *state_str = mqtt_nvs_get_parameter("fft_enabled");
+    if (state_str != NULL) {
+        fft_report_enabled = (strcmp(state_str, "1") == 0);
+        ESP_LOGI(TAG, "FFT reporting loaded from NVS: %s", fft_report_enabled ? "enabled" : "disabled");
+        free(state_str);
+    } else {
+        ESP_LOGI(TAG, "FFT reporting using default: enabled");
+    }
+}
+
+/* Save FFT reporting state to NVS */
+void fft_report_enabled_set(bool enabled)
+{
+    extern void mqtt_nvs_save_parameters(const char *parameter, const char *value);
+    mqtt_nvs_save_parameters("fft_enabled", enabled ? "1" : "0");
+    fft_report_enabled = enabled;
+    ESP_LOGI(TAG, "FFT reporting %s", enabled ? "enabled" : "disabled");
+}
+
+/* Get FFT reporting enabled state */
+bool fft_report_enabled_get(void)
+{
+    return fft_report_enabled;
+}
+#endif /* CONFIG_SPL_FFT_ENABLE */
 
 static esp_err_t mic_i2s_init(void)
 {
@@ -489,6 +708,10 @@ static void mic_i2s_reader_task(void *arg)
             q.sum_sqr_spl += sos_filter_apply(&mic_equalizer, chunk, SAMPLES_CHUNK);
 #if CONFIG_SPL_DIAGNOSTICS
             int64_t t4 = esp_timer_get_time();
+#endif
+#if CONFIG_SPL_FFT_ENABLE
+            /* Keep the equalized (unweighted) samples for the spectrum */
+            fft_capture(chunk, SAMPLES_CHUNK);
 #endif
             /* Weighting and weighted sum of squares */
             q.sum_sqr_weighted += sos_filter_apply(&weighting, chunk, SAMPLES_CHUNK);
@@ -619,7 +842,19 @@ static void spl_calc_task(void *arg)
                      leq_db, WEIGHTING_NAME, overload ? "true" : "false", low ? "true" : "false");
             /* Publish via MQTT if above threshold */
             if (leq_db >= spl_mqtt_threshold) {
+                /* Flash LED_R (red) for ~10ms to indicate threshold exceeded */
+                board_led_operation(LED_G, LED_OFF);  /* Ensure LED_G is off */
+                board_led_operation(LED_R, LED_ON);   /* Turn on red LED */
+                vTaskDelay(pdMS_TO_TICKS(10));        /* Brief 10ms flash */
+                board_led_operation(LED_R, LED_OFF);  /* Turn off red LED */
+                
                 publish_sensor_string(mac_str, json);
+#if CONFIG_SPL_FFT_ENABLE
+                /* Loud noise: ask the reader for the latest samples, the spectrum is reported below */
+                if (fft_state == FFT_IDLE) {
+                    fft_state = FFT_REQUESTED;
+                }
+#endif
             }
 
             leq_sum_sqr = 0;
@@ -633,6 +868,12 @@ static void spl_calc_task(void *arg)
             raw_zeros = 0;
 #endif
         }
+
+#if CONFIG_SPL_FFT_ENABLE
+        if (fft_state == FFT_READY && fft_report_enabled) {
+            fft_report(mic_ref_ampl, mac_str);
+        }
+#endif
 
 #if CONFIG_SPL_DIAGNOSTICS
         uint32_t busy_us = (uint32_t)(esp_timer_get_time() - tc0);
@@ -780,6 +1021,10 @@ static void perf_monitor_task(void *arg)
 esp_err_t spl_meter_start(void)
 {
     spl_threshold_load();
+#if CONFIG_SPL_FFT_ENABLE
+    fft_tables_init();
+    fft_report_enabled_load();
+#endif
     sos_filter_init(&mic_equalizer, MIC_EQ_GAIN, MIC_EQ_SOS, SOS_COUNT(MIC_EQ_SOS));
 #if CONFIG_SPL_WEIGHTING_A
     sos_filter_init(&weighting, A_WEIGHTING_GAIN, A_WEIGHTING_SOS, SOS_COUNT(A_WEIGHTING_SOS));

@@ -275,6 +275,14 @@ menu "Sound Pressure Meter Configuration"
             monitor task that periodically logs reader/calc task timing, queue depth, dropped blocks, stack
             usage, heap and per-task CPU usage. Adds some CPU load and code size to the reader task.
 
+    config SPL_FFT_ENABLE
+        bool "Publish a 16 band spectrum when the SPL threshold is exceeded"
+        default y
+        help
+            When the Leq exceeds the SPL MQTT threshold, a 1024 point integer FFT (31.25 Hz resolution at
+            32 kHz) of the most recent samples is calculated and the level of 16 equal width bands
+            (0-16 kHz, 1 kHz each) is logged and published via MQTT. Uses about 12 kB of RAM.
+
     config SPL_MQTT_THRESHOLD_DB
         int "SPL MQTT publish threshold (dB)"
         range 0 150

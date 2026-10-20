@@ -27,6 +27,16 @@ extern char* mqtt_nvs_get_parameter(const char *parameter);
 extern void spl_threshold_save(double threshold_db);
 extern double spl_threshold_get(void);
 
+// Forward declarations of FFT control functions from spl_meter.c
+#ifdef CONFIG_SPL_FFT_ENABLE
+extern void fft_report_enabled_set(bool enabled);
+extern bool fft_report_enabled_get(void);
+#endif
+
+// Forward declarations of LED flash control functions from main.c
+extern void led_flash_enabled_set(bool enabled);
+extern bool led_flash_enabled_get(void);
+
 #define SERIAL_CMD_BUFFER_SIZE 256
 
 /**
@@ -160,6 +170,62 @@ static int cmd_spl_threshold(int argc, char **argv)
     return 0;
 }
 
+#ifdef CONFIG_SPL_FFT_ENABLE
+/**
+ * @brief Command handler for 'fft_report' command
+ */
+static int cmd_fft_report(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("Usage: fft_report [on|off]\n");
+        printf("Enable/disable FFT spectrum reporting when SPL threshold is exceeded\n");
+        printf("Current state: %s\n", fft_report_enabled_get() ? "enabled" : "disabled");
+        return 0;
+    }
+
+    bool enabled;
+    if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "true") == 0 || strcmp(argv[1], "1") == 0) {
+        enabled = true;
+    } else if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "false") == 0 || strcmp(argv[1], "0") == 0) {
+        enabled = false;
+    } else {
+        printf("Error: argument must be 'on', 'off', 'true', or 'false'\n");
+        return 1;
+    }
+
+    fft_report_enabled_set(enabled);
+    printf("✓ FFT spectrum reporting %s\n", enabled ? "enabled" : "disabled");
+    return 0;
+}
+#endif /* CONFIG_SPL_FFT_ENABLE */
+
+/**
+ * @brief Command handler for 'flash' command
+ */
+static int cmd_flash(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("Usage: flash [on|off]\n");
+        printf("Enable/disable the slow green LED flash indicator\n");
+        printf("Current state: %s\n", led_flash_enabled_get() ? "enabled" : "disabled");
+        return 0;
+    }
+
+    bool enabled;
+    if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "true") == 0 || strcmp(argv[1], "1") == 0) {
+        enabled = true;
+    } else if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "false") == 0 || strcmp(argv[1], "0") == 0) {
+        enabled = false;
+    } else {
+        printf("Error: argument must be 'on', 'off', 'true', or 'false'\n");
+        return 1;
+    }
+
+    led_flash_enabled_set(enabled);
+    printf("✓ LED flash %s\n", enabled ? "enabled" : "disabled");
+    return 0;
+}
+
 /**
  * @brief Command handler for 'restart' command
  */
@@ -227,6 +293,28 @@ static void register_commands(void)
         .argtable = NULL,
     };
     esp_console_cmd_register(&spl_threshold_cmd);
+
+#ifdef CONFIG_SPL_FFT_ENABLE
+    // Register 'fft_report' command
+    esp_console_cmd_t fft_report_cmd = {
+        .command = "fft_report",
+        .help = "Enable/disable FFT spectrum reporting when threshold exceeded",
+        .hint = "[on|off]",
+        .func = cmd_fft_report,
+        .argtable = NULL,
+    };
+    esp_console_cmd_register(&fft_report_cmd);
+#endif
+
+    // Register 'flash' command
+    esp_console_cmd_t flash_cmd = {
+        .command = "flash",
+        .help = "Enable/disable slow green LED flash indicator",
+        .hint = "[on|off]",
+        .func = cmd_flash,
+        .argtable = NULL,
+    };
+    esp_console_cmd_register(&flash_cmd);
 
     // Register 'restart' command
     esp_console_cmd_t restart_cmd = {

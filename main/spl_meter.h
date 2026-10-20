@@ -33,6 +33,18 @@ double spl_threshold_get(void);
  */
 void spl_threshold_save(double threshold_db);
 
+/**
+ * @brief Get the current FFT spectrum reporting enabled state.
+ * @return true if FFT spectrum is reported when threshold is exceeded, false otherwise
+ */
+bool fft_report_enabled_get(void);
+
+/**
+ * @brief Enable or disable FFT spectrum reporting when the SPL threshold is exceeded.
+ * @param enabled true to enable, false to disable
+ */
+void fft_report_enabled_set(bool enabled);
+
 #ifdef __cplusplus
 }
 #endif

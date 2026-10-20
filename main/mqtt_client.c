@@ -125,7 +125,7 @@ void publish_sensor_string(const char* sensor_mac, const char* sensor_json_value
     char *topic_publish_buffer  = NULL;
     int msg_id;
 
-    MALLOC_SPRINTF(topic_publish_buffer, "%s/Gateway/%s/BTtoMQTT/%s/sensor", default_base_topic, mac_str, sensor_mac);
+    MALLOC_SPRINTF(topic_publish_buffer, "%s/Gateway/%s/BTtoMQTT/%s/spl_sensor", default_base_topic, mac_str, sensor_mac);
     ESP_LOGD(TAG, "topic %s message %s", topic_publish_buffer, sensor_json_value);
     msg_id = esp_mqtt_client_publish(client, topic_publish_buffer, sensor_json_value, 0, 0, 0);
     ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
@@ -186,7 +186,34 @@ void handle_event_data(esp_mqtt_event_handle_t event) {
                 } else {
                     ESP_LOGW(TAG, "No 'cmd_data' field in JSON or it's not an object");
                 }
-        }   
+        }
+#ifdef CONFIG_SPL_FFT_ENABLE
+        if (strcmp(command->valuestring, "fft_enable") == 0) {
+            ESP_LOGI(TAG, "FFT enable command received");
+            const cJSON *cmd_data = cJSON_GetObjectItem(json, "cmd_data");
+            if (cmd_data) {
+                bool enabled = false;
+                if (cJSON_IsTrue(cmd_data)) {
+                    enabled = true;
+                } else if (cJSON_IsFalse(cmd_data)) {
+                    enabled = false;
+                } else if (cJSON_IsNumber(cmd_data)) {
+                    enabled = (cmd_data->valueint != 0);
+                } else if (cJSON_IsString(cmd_data)) {
+                    const char *str = cmd_data->valuestring;
+                    enabled = (strcmp(str, "true") == 0 || strcmp(str, "1") == 0 || strcmp(str, "on") == 0);
+                } else {
+                    ESP_LOGW(TAG, "Invalid 'cmd_data' format for fft_enable");
+                    cJSON_Delete(json);
+                    return;
+                }
+                extern void fft_report_enabled_set(bool enabled);
+                fft_report_enabled_set(enabled);
+            } else {
+                ESP_LOGW(TAG, "No 'cmd_data' field in FFT enable command");
+            }
+        }
+#endif /* CONFIG_SPL_FFT_ENABLE */   
     } else {
         ESP_LOGW(TAG, "No 'cmd' field in JSON or it's not a string");
     }
