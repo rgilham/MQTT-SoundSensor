@@ -456,6 +456,28 @@ void mqtt_nvs_load_parameters() {
     }
 }
 
+char* mqtt_nvs_get_parameter(const char *parameter) {
+    nvs_handle_t my_handle;
+    esp_err_t err = nvs_open("mqtt", NVS_READONLY, &my_handle);
+    if (err != ESP_OK) {
+        return NULL;
+    }
+    
+    size_t required_size;
+    err = nvs_get_str(my_handle, parameter, NULL, &required_size);
+    if (err != ESP_OK) {
+        nvs_close(my_handle);
+        return NULL;
+    }
+    
+    char *value = malloc(required_size);
+    if (value != NULL) {
+        nvs_get_str(my_handle, parameter, value, &required_size);
+    }
+    nvs_close(my_handle);
+    return value;
+}
+
 void mqtt_main(void)
 {
     //Requires that wifi is already provisioned and connected. 

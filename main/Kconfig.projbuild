@@ -274,6 +274,15 @@ menu "Sound Pressure Meter Configuration"
             monitor task that periodically logs reader/calc task timing, queue depth, dropped blocks, stack
             usage, heap and per-task CPU usage. Adds some CPU load and code size to the reader task.
 
+    config SPL_MQTT_THRESHOLD_DB
+        int "SPL MQTT publish threshold (dB)"
+        range 0 150
+        default 50
+        help
+            Sound pressure level readings above this threshold (in dB) will be published via MQTT.
+            Set to 0 to publish all readings. Configurable at runtime via serial terminal
+            using the 'spl_threshold' command.
+
 endmenu
 
 menu "Vibration Sensor configuration"

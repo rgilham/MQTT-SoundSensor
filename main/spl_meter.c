@@ -342,6 +342,47 @@ static perf_stats_t perf;
 /* Raw 32-bit I2S words, shifted to the microphone bit depth and filtered in place */
 static int32_t chunk[SAMPLES_CHUNK];
 
+/* SPL MQTT threshold: only publish readings above this level (dB) */
+static double spl_mqtt_threshold = CONFIG_SPL_MQTT_THRESHOLD_DB;
+
+/* Load SPL MQTT threshold from NVS, or use default from Kconfig */
+static void spl_threshold_load(void)
+{
+    extern char* mqtt_nvs_get_parameter(const char *parameter);
+    char *threshold_str = mqtt_nvs_get_parameter("spl_threshold");
+    if (threshold_str != NULL) {
+        double val = atof(threshold_str);
+        if (val >= 0.0 && val <= 150.0) {
+            spl_mqtt_threshold = val;
+            ESP_LOGI(TAG, "SPL MQTT threshold loaded from NVS: %.1f dB", spl_mqtt_threshold);
+        }
+        free(threshold_str);
+    } else {
+        ESP_LOGI(TAG, "SPL MQTT threshold using default: %.1f dB", spl_mqtt_threshold);
+    }
+}
+
+/* Save SPL MQTT threshold to NVS */
+void spl_threshold_save(double threshold_db)
+{
+    extern void mqtt_nvs_save_parameters(const char *parameter, const char *value);
+    if (threshold_db >= 0.0 && threshold_db <= 150.0) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%.1f", threshold_db);
+        mqtt_nvs_save_parameters("spl_threshold", buf);
+        spl_mqtt_threshold = threshold_db;
+        ESP_LOGI(TAG, "SPL MQTT threshold saved: %.1f dB", threshold_db);
+    } else {
+        ESP_LOGW(TAG, "SPL MQTT threshold out of range (0-150): %.1f dB", threshold_db);
+    }
+}
+
+/* Get current SPL MQTT threshold */
+double spl_threshold_get(void)
+{
+    return spl_mqtt_threshold;
+}
+
 static esp_err_t mic_i2s_init(void)
 {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
@@ -576,7 +617,10 @@ static void spl_calc_task(void *arg)
             snprintf(json, sizeof(json),
                      "{\"spl\":%.1f,\"weighting\":\"%s\",\"overload\":%s,\"below_noise_floor\":%s}",
                      leq_db, WEIGHTING_NAME, overload ? "true" : "false", low ? "true" : "false");
-            //publish_sensor_string(mac_str, json);
+            /* Publish via MQTT if above threshold */
+            if (leq_db >= spl_mqtt_threshold) {
+                publish_sensor_string(mac_str, json);
+            }
 
             leq_sum_sqr = 0;
             leq_samples = 0;
@@ -735,6 +779,7 @@ static void perf_monitor_task(void *arg)
 
 esp_err_t spl_meter_start(void)
 {
+    spl_threshold_load();
     sos_filter_init(&mic_equalizer, MIC_EQ_GAIN, MIC_EQ_SOS, SOS_COUNT(MIC_EQ_SOS));
 #if CONFIG_SPL_WEIGHTING_A
     sos_filter_init(&weighting, A_WEIGHTING_GAIN, A_WEIGHTING_SOS, SOS_COUNT(A_WEIGHTING_SOS));

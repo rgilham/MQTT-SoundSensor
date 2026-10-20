@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 #include "board.h"
 #include "spl_meter.h"
+#include "serial_commands.h"
 
 #include <wifi_provisioning/manager.h>
 #include "ota_update.h"
@@ -154,6 +155,9 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "Init MQTT client");
     mqtt_main();
+    
+    // Start serial command processor for configuration via USB console
+    serial_commands_init(8192, tskIDLE_PRIORITY + 1);
     
     ESP_LOGI(TAG, "Starting Sound Scanner");
     

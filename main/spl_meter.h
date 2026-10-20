@@ -21,6 +21,18 @@ extern "C" {
  */
 esp_err_t spl_meter_start(void);
 
+/**
+ * @brief Get the current SPL MQTT publish threshold.
+ * @return Threshold in dB
+ */
+double spl_threshold_get(void);
+
+/**
+ * @brief Set the SPL MQTT publish threshold.
+ * @param threshold_db Threshold in dB (0-150), only publish readings above this level
+ */
+void spl_threshold_save(double threshold_db);
+
 #ifdef __cplusplus
 }
 #endif

@@ -14,6 +14,7 @@
 #include "argtable3/argtable3.h"
 #include "esp_task_wdt.h"
 #include "esp_mac.h"
+#include "sdkconfig.h"
 
 
 static const char *TAG = "serial_cmd";
@@ -21,6 +22,10 @@ static const char *TAG = "serial_cmd";
 // Forward declaration of the NVS functions from mqtt_client.c
 extern void mqtt_nvs_save_parameters(const char *parameter, const char *value);
 extern char* mqtt_nvs_get_parameter(const char *parameter);
+
+// Forward declarations of SPL threshold functions from spl_meter.c
+extern void spl_threshold_save(double threshold_db);
+extern double spl_threshold_get(void);
 
 #define SERIAL_CMD_BUFFER_SIZE 256
 
@@ -125,8 +130,33 @@ static int cmd_status(int argc, char **argv)
     printf("Broker URI: %s\n", broker_uri ? broker_uri : "(not set)");
     if (broker_uri) free(broker_uri);
     
+    printf("SPL MQTT Threshold: %.1f dB\n", spl_threshold_get());
+    
     printf("\nNote: Changes are saved to NVS and will persist after reboot\n");
     printf("==================================\n\n");
+    return 0;
+}
+
+/**
+ * @brief Command handler for 'spl_threshold' command
+ */
+static int cmd_spl_threshold(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("Usage: spl_threshold <value>\n");
+        printf("Set the SPL MQTT publish threshold in dB (0-150)\n");
+        printf("Current threshold: %.1f dB\n", spl_threshold_get());
+        return 0;
+    }
+
+    double threshold = atof(argv[1]);
+    if (threshold < 0.0 || threshold > 150.0) {
+        printf("Error: threshold must be between 0 and 150 dB\n");
+        return 1;
+    }
+
+    spl_threshold_save(threshold);
+    printf("✓ SPL MQTT threshold set to: %.1f dB\n", threshold);
     return 0;
 }
 
@@ -188,6 +218,16 @@ static void register_commands(void)
     };
     esp_console_cmd_register(&status_cmd);
 
+    // Register 'spl_threshold' command
+    esp_console_cmd_t spl_threshold_cmd = {
+        .command = "spl_threshold",
+        .help = "Set SPL MQTT publish threshold (dB)",
+        .hint = "<0-150>",
+        .func = cmd_spl_threshold,
+        .argtable = NULL,
+    };
+    esp_console_cmd_register(&spl_threshold_cmd);
+
     // Register 'restart' command
     esp_console_cmd_t restart_cmd = {
         .command = "restart",
@@ -226,7 +266,7 @@ static void initialize_console(void)
     linenoiseHistorySetMaxLen(8);
 
     printf("\n=== MQTT Configuration Terminal ===\n");
-    printf("Available commands: username, password, uri, status, restart, help\n");
+    printf("Available commands: username, password, uri, spl_threshold, status, restart, help\n");
     printf("Type 'help' for more information\n");
     printf("=====================================\n\n");
 }
@@ -263,6 +303,8 @@ void init_usb_cdc_console() {
  */
 static void serial_command_task(void *pvParameters)
 {
+    ESP_LOGI(TAG, "Serial command task started (stack=%u bytes)", (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    
     // Disable task watchdog for this task since it blocks on user input
     esp_task_wdt_delete(NULL);
     init_usb_cdc_console();
