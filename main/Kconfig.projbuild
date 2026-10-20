@@ -1,0 +1,337 @@
+menu "Provisioning Configuration"
+
+    choice EXAMPLE_PROV_TRANSPORT
+        bool "Provisioning Transport"
+        default EXAMPLE_PROV_TRANSPORT_SOFTAP if IDF_TARGET_ESP32S2
+        default EXAMPLE_PROV_TRANSPORT_BLE
+        help
+            Wi-Fi provisioning component offers both, SoftAP and BLE transports. Choose any one.
+
+        config EXAMPLE_PROV_TRANSPORT_BLE
+            bool "BLE"
+            select BT_ENABLED
+            depends on !IDF_TARGET_ESP32S2
+        config EXAMPLE_PROV_TRANSPORT_SOFTAP
+            bool "Soft AP"
+            select LWIP_IPV4
+    endchoice
+
+    choice EXAMPLE_PROV_SECURITY_VERSION
+        bool "Protocomm security version"
+        default EXAMPLE_PROV_SECURITY_VERSION_2
+        help
+            Wi-Fi provisioning component offers 3 security versions.
+            The example offers a choice between security version 1 and 2.
+
+        config EXAMPLE_PROV_SECURITY_VERSION_1
+            bool "Security version 1"
+            select ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1
+
+        config EXAMPLE_PROV_SECURITY_VERSION_2
+            bool "Security version 2"
+            select ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2
+    endchoice
+
+    choice EXAMPLE_PROV_MODE
+        bool "Security version 2 mode"
+        depends on EXAMPLE_PROV_SECURITY_VERSION_2
+        default EXAMPLE_PROV_SEC2_DEV_MODE
+
+        config EXAMPLE_PROV_SEC2_DEV_MODE
+            bool "Security version 2 development mode"
+            depends on EXAMPLE_PROV_SECURITY_VERSION_2
+            help
+                This enables the development mode for
+                security version 2.
+                Please note that this mode is NOT recommended for production purpose.
+
+        config EXAMPLE_PROV_SEC2_PROD_MODE
+            bool "Security version 2 production mode"
+            depends on EXAMPLE_PROV_SECURITY_VERSION_2
+            help
+                This enables the production mode for
+                security version 2.
+    endchoice
+
+    config EXAMPLE_PROV_TRANSPORT
+        int
+        default 1 if EXAMPLE_PROV_TRANSPORT_BLE
+        default 2 if EXAMPLE_PROV_TRANSPORT_SOFTAP
+
+    config EXAMPLE_PROV_ENABLE_APP_CALLBACK
+        bool "Enable provisioning manager app callback"
+        default n
+        help
+            This is for advanced use-cases like modifying Wi-Fi configuration parameters. This
+            executes a blocking app callback when any provisioning event is triggered.
+
+    config EXAMPLE_RESET_PROVISIONED
+        bool
+        default n
+        prompt "Reset provisioned status of the device"
+        help
+            This erases the NVS to reset provisioned status of the device on every reboot.
+            Provisioned status is determined by the Wi-Fi STA configuration, saved on the NVS.
+
+    config EXAMPLE_RESET_PROV_MGR_ON_FAILURE
+        bool
+        default y
+        prompt "Reset provisioned credentials and state machine after session failure"
+        help
+            Enable resetting provisioned credentials and state machine after session failure.
+            This will restart the provisioning service after retries are exhausted.
+
+    config EXAMPLE_PROV_MGR_CONNECTION_CNT
+        int
+        default 5
+        prompt "Max connection attempts before resetting provisioning state machine"
+        depends on EXAMPLE_RESET_PROV_MGR_ON_FAILURE
+        help
+            Set the total number of connection attempts to avoid reconnecting to an inexistent AP or if credentials
+            are misconfigured. Provisioned credentials are erased and internal state machine
+            is reset after this threshold is reached.
+
+    config EXAMPLE_PROV_SHOW_QR
+        bool "Show provisioning QR code"
+        default n
+        help
+            Show the QR code for provisioning.
+
+    config EXAMPLE_PROV_USING_BLUEDROID
+        bool
+        depends on (BT_BLUEDROID_ENABLED && (IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32S3))
+        select BT_BLE_42_FEATURES_SUPPORTED
+        default y
+        help
+            This enables BLE 4.2 features for Bluedroid.
+
+endmenu
+
+menu "MQTT Configuration"
+
+    config MQTT_PROXY_BROKER_URI
+        string "Broker URL"
+        default "mqtts://iot.inventech.co.za:8883"
+        help
+            URL of an mqtt broker to connects to.
+    config MQTT_PROXY_BROKER_USERNAME
+        string "Broker Default Username"
+        default "24587CBED3E8"
+        help
+            Username for the mqtt broker.
+            This is the same as the client id of the devide
+            ESP32_<Last 6 digits of MAC address>
+
+    config MQTT_PROXY_BROKER_PASSWORD
+        string "Broker Default Password"
+        default "bcc70905991e0a4efe84b534828aa31d"
+        help
+            Password for the mqtt broker.            
+            This is a md5 hash of the client id of the device, which is ESP32_<Last 6 digits of MAC address><full mac address>
+            echo -n 'Your text string here' | md5sum
+    config BASE_TOPIC
+        string "Base topic for MQTT"
+        default "SanSensor"
+        help
+            The base topic for MQTT. The device will publish to topics in the format <base_topic>/Gateway/<device_mac>/BTtoMQTT/<sensor_mac>/sensor
+    config LAST_SEEN_TIMEOUT
+        int "Last seen timeout (seconds)"
+        default 120
+        help
+            The time in seconds after which a device is considered "not seen" if it hasn't been seen again. This is used to determine when to remove devices from the status report.
+endmenu
+
+menu "OTA Update Configuration"
+
+    config OTA_UPDATE_ENABLE
+        bool "Enable OTA updates"
+        default y
+        help
+            Enable the OTA update functionality. This will allow the device to check for updates and apply them when available.
+    config OTA_FIRMWARE_UPG_URL
+        string "OTA Update URL"
+        default "http://apps.inventech.co.za/fota/static/sound_sensor.bin"
+        help
+            The URL from which to download the OTA update binary. This should point to a valid firmware binary that is compatible with the device.
+    config OTA_RECV_TIMEOUT
+        int "OTA Receive Timeout"
+        default 5000
+        help
+            Maximum time for reception                  
+endmenu
+
+
+
+menu "Sound BOARD Configuration"
+
+    choice SOUND_BOARD
+        prompt "Board selection for Sound Sensor"
+        default BLE_VIBSENSOR_V1 if IDF_TARGET_ESP32C6
+        help
+            Select this option to choose the board for Sound Sensor. The default is VIBSENSOR_V1
+
+        config BLE_VIBSENSOR_V1
+            bool "BLE_ESP_Vibsensor"
+            depends on IDF_TARGET_ESP32C6        
+
+    endchoice
+
+endmenu
+
+menu "Sound Pressure Meter Configuration"
+
+    config SPL_I2S_SCK_GPIO
+        int "I2S SCK (BCLK) GPIO Number"
+        default 10
+        help
+            GPIO connected to the SCK/BCLK pin of the I2S microphone.
+
+    config SPL_I2S_WS_GPIO
+        int "I2S WS (LRCLK) GPIO Number"
+        default 11
+        help
+            GPIO connected to the WS/LRCLK pin of the I2S microphone.
+
+    config SPL_I2S_SD_GPIO
+        int "I2S SD (data in) GPIO Number"
+        default 4
+        help
+            GPIO connected to the SD (data out) pin of the I2S microphone.
+
+    config SPL_I2S_RIGHT_CHANNEL
+        bool "Microphone is on the right channel (L/R pin high)"
+        default n
+        help
+            Select if the microphone L/R pin is tied high. Leave disabled when it is tied low (left channel).
+
+    choice SPL_MIC_TYPE
+        prompt "I2S microphone (equalizer filter)"
+        default SPL_MIC_ICS43434
+        help
+            Selects the IIR filter used to flatten the frequency response of the microphone.
+
+        config SPL_MIC_ICS43434
+            bool "TDK/InvenSense ICS-43434"
+        config SPL_MIC_ICS43432
+            bool "TDK/InvenSense ICS-43432"
+        config SPL_MIC_INMP441
+            bool "TDK/InvenSense INMP441"
+        config SPL_MIC_DC_BLOCKER_ONLY
+            bool "Other (DC blocker only)"
+    endchoice
+
+    choice SPL_WEIGHTING
+        prompt "Frequency weighting"
+        default SPL_WEIGHTING_A
+
+        config SPL_WEIGHTING_A
+            bool "A-weighting (dBA)"
+        config SPL_WEIGHTING_C
+            bool "C-weighting (dBC)"
+        config SPL_WEIGHTING_Z
+            bool "None (Z-weighting, dBZ)"
+    endchoice
+
+    config SPL_LEQ_PERIOD_SEC
+        int "Leq period / MQTT publish interval (seconds)"
+        range 1 3600
+        default 1
+        help
+            Equivalent continuous sound level is calculated over this period and published via MQTT.
+
+    config SPL_MIC_SENSITIVITY_DBFS
+        int "Microphone sensitivity (dBFS)"
+        default -26
+        help
+            dBFS value expected at the reference level (sensitivity from the microphone datasheet).
+
+    config SPL_MIC_REF_DB
+        int "Sensitivity reference level (dB SPL)"
+        default 94
+        help
+            Level at which the sensitivity is specified in the datasheet (typically 94 dB, 1 kHz sine).
+
+    config SPL_MIC_OVERLOAD_DB
+        int "Acoustic overload point (dB SPL)"
+        default 116
+
+    config SPL_MIC_NOISE_DB
+        int "Microphone noise floor (dB SPL)"
+        default 29
+
+    config SPL_MIC_BITS
+        int "Valid bits in the microphone I2S data"
+        range 16 32
+        default 24
+
+    config SPL_DIAGNOSTICS
+        bool "Enable SPL diagnostics and performance statistics"
+        default n
+        select FREERTOS_USE_TRACE_FACILITY
+        select FREERTOS_GENERATE_RUN_TIME_STATS
+        help
+            Logs raw I2S sample statistics (min/max/mean/zeros, Z-weighted level) every Leq period, and starts a
+            monitor task that periodically logs reader/calc task timing, queue depth, dropped blocks, stack
+            usage, heap and per-task CPU usage. Adds some CPU load and code size to the reader task.
+
+endmenu
+
+menu "Vibration Sensor configuration"
+
+    config HDC1080_I2C_ADDR
+        hex "I2C address of HDC1080"
+        default 0x40
+        help
+            I2C address of HDC1060. The default is `I2C_HDC1080_DEV_ADDR_0`, or
+            0x40. See available options in hdc1060.h.
+
+    config VL53L0C_I2C_ADDR
+        hex "I2C address of VL53L0C"
+        default 0x29
+        help
+            I2C address of VL53L0C. The default is 0x29. See available options in vl53l0x.h.
+    
+    config VL53L0C_XSHUT_PIN
+        int "XSHUT GPIO Number"
+        default 22
+        help
+            The GPIO number connected to the XSHUT pin of the VL53L0C sensor.
+
+    config VL53L0C_INT_ACC_PIN
+        int "INT_ACC GPIO Number"
+        default 5
+        help
+            The GPIO number connected to the INT pin of the VL53L0C sensor.
+            
+
+    config VIBSENSOR_I2C_PORT_NUMBER
+        hex "I2C Port Number"
+        default 0x0 if BLE_MESH_ESP32C6_DEV || BLE_VIBSENSOR_V1
+        help
+            I2C port number for Vibration Sensor. The default is 0 for ESP32C6.
+    
+    config  VIBSENSOR_I2C_SCAN_FOR_DEVICES
+        bool "Scan for I2C devices"
+        default n
+        help
+            Enable this option to scan for I2C devices connected to the bus.
+            This is useful for debugging purposes.
+
+
+
+    config BLE_VIBSENSOR_I2C_MASTER_SCL
+        int "SCL GPIO Number"
+        default 7 if BLE_MESH_ESP32C6_DEV || BLE_VIBSENSOR_V1
+        help
+            GPIO number for I2C Master clock line.
+
+    config BLE_VIBSENSOR_I2C_MASTER_SDA
+        int "SDA GPIO Number"
+        default 6 if BLE_MESH_ESP32C6_DEV || BLE_VIBSENSOR_V1
+        help
+            GPIO number for I2C Master data line.
+
+       
+                      
+endmenu
+
